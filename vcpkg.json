@@ -1,0 +1,11 @@
+{
+	"$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+	"name": "smooth-headtracking",
+	"version-string": "2.4.0",
+	"builtin-baseline": "17f35ad2418007a895ced8a4cece4ab34068a58d",
+	"dependencies": [
+		"fmt",
+		"spdlog",
+		"simpleini"
+	]
+}
