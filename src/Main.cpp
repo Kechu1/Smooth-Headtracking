@@ -90,6 +90,28 @@ namespace
 		}
 	};
 
+	RE::BSTEventSource<RE::SandmanKill::Event>* TryGetSandmanSource()
+	{
+		__try {
+			return RE::SandmanKill::Event::GetEventSource();
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {
+			return nullptr;
+		}
+	}
+
+	void RegisterSandmanSink()
+	{
+		static SandmanKillSink sandmanSink;
+		if (auto* source = TryGetSandmanSource()) {
+			source->RegisterSink(&sandmanSink);
+			REX::LogInformation("SmoothHeadtracking: SandmanKillSink registrado OK.");
+		}
+		else {
+			REX::LogWarning("SmoothHeadtracking: no se pudo registrar Sandman, sigue sin esa pausa.");
+		}
+	}
+
 	float SmoothnessToRate(float a_smoothness0to100)
 	{
 		float t = std::clamp(a_smoothness0to100, 0.0f, 100.0f) / 100.0f;
@@ -178,7 +200,7 @@ namespace
 		REX::LogInformation("SmoothHeadtracking: settings cargados (F4SE={} MCM defaults={} MCM={})", fallback, mcmDefaults, mcm);
 	}
 
-	// el MCM vive en el menu de pausa, al cerrarlo recargo
+	// MCM menu de pausa
 	class MenuCloseSink : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 	{
 	public:
@@ -209,6 +231,13 @@ namespace
 				if (auto* ui = RE::UI::GetSingleton()) {
 					registered = ui->RE::BSTEventSource<RE::MenuOpenCloseEvent>::RegisterSink(&menuSink);
 				}
+			}
+
+			// sandman, una sola vez
+			static bool sandmanDone = false;
+			if (!sandmanDone) {
+				sandmanDone = true;
+				RegisterSandmanSink();
 			}
 		}
 		break;
@@ -382,16 +411,18 @@ namespace
 	}
 
 	// condiciones en los que el tracking de cabeza y spine2 (Futuramente Neck) debe
-	// quedar completamente apagado.
+	// quedar completamente apagado. El dialogo se ve antes, en IsInDialogue.
 	bool IsTrackingDisabled(PlayerCharacter* a_this, PlayerCamera* a_camera, const CameraData& a_camData, float a_relativeYaw, float a_delta, bool& a_isIdle, bool& a_isInGiveUp)
 	{
-		bool isBadCameraState = a_camera && a_camera->currentState && (a_camera->currentState->id == CameraStates::kDialogue || a_camera->currentState->id == CameraStates::kVATS || a_camera->currentState->id == CameraStates::kFurniture || a_camera->currentState->id == CameraStates::kBleedout || a_camera->currentState->id == CameraStates::kFirstPerson || a_camera->currentState->id == CameraStates::kIronSights);
+		bool isBadCameraState = a_camera && a_camera->currentState && (a_camera->currentState->id == CameraStates::kVATS || a_camera->currentState->id == CameraStates::kFurniture || a_camera->currentState->id == CameraStates::kBleedout || a_camera->currentState->id == CameraStates::kFirstPerson || a_camera->currentState->id == CameraStates::kIronSights);
 
 		bool isInFurniture = a_this->currentProcess && a_this->currentProcess->GetOccupiedFurniture().get() != nullptr;
 
 		bool isWeaponDrawnDisabled = g_disableWithWeaponDrawn.load(std::memory_order_relaxed) ? (a_this->weaponState != RE::WEAPON_STATE::kSheathed) : IsWeaponNotRelaxed(a_this);
 
 		bool isSandmanActive = g_sandmanActive.load(std::memory_order_relaxed);
+
+		bool isInKillMove = a_this->boolFlags.any(RE::Actor::BOOL_FLAGS::kIsInKillMove);
 
 		// Detectar si estamos en Give Up para no aplicar idle
 		float giveUpYaw = g_giveUpYawDeg.load(std::memory_order_relaxed) * (PI / 180.0f);
@@ -403,15 +434,11 @@ namespace
 			a_isIdle = IsPlayerIdle(a_this, a_camData, a_delta);
 		}
 
-		return a_this->IsDead(false) || isBadCameraState || isInFurniture || isWeaponDrawnDisabled || RE::IsPlayerInDialogue() || a_isIdle || isSandmanActive;
+		return a_this->IsDead(false) || isBadCameraState || isInFurniture || isWeaponDrawnDisabled || a_isIdle || isSandmanActive || isInKillMove;
 	}
 
-	// Reparte el yaw relativo entre cabeza y spine2 (cabeza satura primero, el
-	// remanente hasta spine2MaxYaw se lo lleva spine2), y aplica el hasGivenUp /
-	// trackingGate: mas alla de giveUpYawDeg el tracking se "suelta" con histeresis,
-	// y trackingGate suaviza esa transicion en vez de cortar el target de golpe.
-	// El hecho del GiveUp es porque obviamente en tercera persona quiero
-	// ver la carita de mi PJ.
+	// Reparte el yaw entre cabeza y spine2 (cabeza satura primero, el
+	// remanente hasta spine2MaxYaw se lo lleva spine2).
 	void SplitYaw(float a_yaw, float& a_head, float& a_spine2)
 	{
 		float headMaxYaw = g_headMaxYawDeg.load(std::memory_order_relaxed) * (PI / 180.0f);
@@ -429,6 +456,11 @@ namespace
 		a_spine2 = sign * useSpine2;
 	}
 
+	// Aplica el hasGivenUp / trackingGate: mas alla de giveUpYawDeg el tracking
+	// se "suelta" con histeresis, y trackingGate suaviza esa transicion en vez de
+	// cortar el target de golpe.
+	// El hecho del GiveUp es porque obviamente en tercera persona quiero
+	// ver la carita de mi PJ.
 	void ComputeYawTargets(float a_relativeYaw, float a_delta, bool a_forceGiveUp, float& a_targetHeadYaw, float& a_targetSpine2Yaw, float& a_trackingGate, bool& a_hasGivenUp)
 	{
 		float smoothSpeed = g_smoothSpeed.load(std::memory_order_relaxed);
@@ -661,7 +693,9 @@ namespace
 			// Look at camera
 			// hacia donde ESTA la camara (su posicion), no hacia donde mira
 			float camRelYaw = 0.0f, camPitch = 0.0f;
-			ComputeLookAtCameraTargets(root3D, headNode, camera, camRelYaw, camPitch);
+			if (g_lookAtCamera.load(r)) {
+				ComputeLookAtCameraTargets(root3D, headNode, camera, camRelYaw, camPitch);
+			}
 
 			// cono de enfrente, con histeresis pa que no titile en el borde
 			const float coneEnter = g_lookAtAngleDeg.load(r) * (PI / 180.0f);
@@ -918,16 +952,6 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 	InstallHooks();
 	F4SE::GetPapyrusInterface()->Register(RegisterPapyrusFunctions);
 	F4SE::GetMessagingInterface()->RegisterListener(OnF4SEMessage);
-
-	// --- sandman Perk ---
-	static SandmanKillSink sandmanSink;
-	if (auto* source = RE::SandmanKill::Event::GetEventSource()) {
-		source->RegisterSink(&sandmanSink);
-		REX::LogInformation("SmoothHeadtracking: SandmanKillSink registrado OK.");
-	}
-	else {
-		REX::LogWarning("SmoothHeadtracking: GetEventSource() devolvio nullptr.");
-	}
 
 	return true;
 }
