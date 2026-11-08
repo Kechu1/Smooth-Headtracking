@@ -34,8 +34,6 @@ cmake --preset build-release-msvc-msvc
 cmake --build --preset release-msvc-msvc
 ```
 
-The DLL ends up in `build/release-msvc-msvc/RelWithDebInfo/SmoothHeadtracking.dll`.
-
 ## Credits
 
 - [CommonLibF4 AV](https://github.com/LucaDotGit/CommonLibF4) by LucaDotGit, based on [CommonLibF4](https://github.com/Ryan-rsm-McKenzie/CommonLibF4) by Ryan McKenzie and [CommonLibF4 NG](https://github.com/alandtse/CommonLibF4) by alandtse
