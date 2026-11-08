@@ -67,6 +67,10 @@ namespace
 	constexpr float IDLE_SPEED_MULTIPLIER = 0.5f; // Idle: 50% más lento
 	constexpr float FADE_DURATION = 2.0f;		  // 2 segundos para volver a 100%
 
+	// velocidades por parte del cuerpo, igual que en la de FNV
+	constexpr float SPINE_SPEED_MULTIPLIER = 0.65f;	 // la columna arrastra detras de la cabeza
+	constexpr float RETURN_SPEED_MULTIPLIER = 1.35f; // apagado vuelve mas rapido al neutral
+
 	// smoothing
 	constexpr float kMinTauSeconds = 0.02f;
 	constexpr float kMaxTauSeconds = 1.2f;
@@ -828,7 +832,11 @@ namespace
 		// Aplicar interpolación
 		float effectiveSpeed = smoothSpeed * currentSpeedMultiplier;
 		float t = 1.0f - std::exp(-effectiveSpeed * a_delta);
-		float tNormal = 1.0f - std::exp(-smoothSpeed * a_delta);
+
+		// apagado (dialogo, arma, etc) vuelve mas rapido; trackeando, la columna va mas lenta
+		float baseSpeed = isDisabled ? smoothSpeed * RETURN_SPEED_MULTIPLIER : smoothSpeed;
+		float tNormal = 1.0f - std::exp(-baseSpeed * a_delta);
+		float tSpine = isDisabled ? tNormal : 1.0f - std::exp(-smoothSpeed * SPINE_SPEED_MULTIPLIER * a_delta);
 
 		// Interpola siempre hacia los targets (incluso con tracking apagado, para
 		// que la cabeza vuelva a la pose neutral de forma suave y no de un corte).
@@ -841,7 +849,7 @@ namespace
 		else {
 			smoothedYaw += (targetHeadYaw - smoothedYaw) * tNormal;
 			smoothedPitch += (clampedPitch - smoothedPitch) * tNormal;
-			smoothedSpine2Yaw += (targetSpine2Yaw - smoothedSpine2Yaw) * tNormal;
+			smoothedSpine2Yaw += (targetSpine2Yaw - smoothedSpine2Yaw) * tSpine;
 			smoothedNeckPitch += (targetNeckPitch - smoothedNeckPitch) * tNormal;
 		}
 
