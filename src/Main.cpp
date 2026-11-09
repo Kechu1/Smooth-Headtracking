@@ -46,10 +46,11 @@ namespace
 
 	// Look at camera
 	std::atomic<bool> g_lookAtCamera{ true };
-	float g_lookAtCamWeight = 0.0f; // 0 = mira, 1 = camara
-	std::atomic<float> g_lookAtAngleDeg{ 45.0f }; // cono de enfrente donde te mira
-	std::atomic<float> g_lookAtDelay{ 0.4f };     // seg en el centro antes de mirarte
-	std::atomic<float> g_lookAtSpeed{ 2.0f };     // rate, sale de LookAtCameraSmoothness
+	float g_lookAtProgress = 0.0f; // 0 = mira, 1 = camara
+	std::atomic<float> g_lookAtAngleDeg{ 45.0f }; 
+	std::atomic<float> g_lookAtDelay{ 0.4f };    
+	std::atomic<float> g_lookAtDuration{ 0.75f }; 
+	constexpr float LOOKAT_EXIT_MULTIPLIER = 0.8f; 
 	float g_lookAtSmoothness = 40.0f;
 	bool g_lookAtInCone = false;
 	float g_lookAtTimer = 0.0f;
@@ -116,6 +117,13 @@ namespace
 		}
 	}
 
+	// 0-100 -> segundos que tarda el giro hacia la camara (0.25 a 1.5)
+	float SmoothnessToDuration(float a_smoothness0to100)
+	{
+		float t = std::clamp(a_smoothness0to100, 0.0f, 100.0f) / 100.0f;
+		return 0.25f + 1.25f * t;
+	}
+
 	float SmoothnessToRate(float a_smoothness0to100)
 	{
 		float t = std::clamp(a_smoothness0to100, 0.0f, 100.0f) / 100.0f;
@@ -173,7 +181,7 @@ namespace
 		g_lookAtAngleDeg.store(std::clamp(ReadFloat(a_ini, s, "LookAtCameraAngle", g_lookAtAngleDeg.load(r)), 5.0f, 90.0f), r);
 		g_lookAtDelay.store(std::max(0.0f, ReadFloat(a_ini, s, "LookAtCameraDelay", g_lookAtDelay.load(r))), r);
 		g_lookAtSmoothness = ReadFloat(a_ini, s, "LookAtCameraSmoothness", g_lookAtSmoothness);
-		g_lookAtSpeed.store(SmoothnessToRate(g_lookAtSmoothness), r);
+		g_lookAtDuration.store(SmoothnessToDuration(g_lookAtSmoothness), r);
 	}
 
 	bool LoadIniLayer(const char* a_path)
@@ -589,7 +597,7 @@ namespace
 			smoothedPitch = 0.0f;
 			smoothedSpine2Yaw = 0.0f;
 			smoothedNeckPitch = 0.0f;
-			g_lookAtCamWeight = 0.0f;
+			g_lookAtProgress = 0.0f;
 			g_lookAtInCone = false;
 			g_lookAtTimer = 0.0f;
 
@@ -660,7 +668,7 @@ namespace
 			smoothedPitch = 0.0f;
 			smoothedSpine2Yaw = 0.0f;
 			smoothedNeckPitch = 0.0f;
-			g_lookAtCamWeight = 0.0f;
+			g_lookAtProgress = 0.0f;
 			g_lookAtInCone = false;
 			g_lookAtTimer = 0.0f;
 			return;
@@ -718,7 +726,7 @@ namespace
 
 			// mientras te mira (o va saliendo) la mira queda suelta,
 			// asi siempre pasa por el centro y no cruza de un lado al otro
-			const bool forceGiveUp = g_lookAtInCone || g_lookAtCamWeight > 0.05f;
+			const bool forceGiveUp = g_lookAtInCone || g_lookAtProgress > 0.0f;
 
 			float trackingGate = 1.0f;
 			bool hasGivenUp = false;
@@ -727,9 +735,9 @@ namespace
 			float rawPitch = std::clamp(camData.camPitch, -maxPitchDown, maxPitchUp);
 			clampedPitch = rawPitch * trackingGate;
 
-			// primero vuelve al centro, espera un ratito y recien ahi te mira
+			// el delay cuenta apenas entra al cono, mientras la cabeza igual va soltando la mira
 			bool wantLook = false;
-			if (g_lookAtInCone && trackingGate < 0.1f) {
+			if (g_lookAtInCone) {
 				g_lookAtTimer += a_delta;
 				wantLook = g_lookAtTimer >= g_lookAtDelay.load(r);
 			}
@@ -737,15 +745,19 @@ namespace
 				g_lookAtTimer = 0.0f;
 			}
 
-			const float lookT = 1.0f - std::exp(-g_lookAtSpeed.load(r) * a_delta);
-			g_lookAtCamWeight += ((wantLook ? 1.0f : 0.0f) - g_lookAtCamWeight) * lookT;
+			// avance lineal con duracion fija, la salida un poco mas rapida
+			const float enterDur = std::max(g_lookAtDuration.load(r), 0.05f);
+			const float dur = wantLook ? enterDur : enterDur * LOOKAT_EXIT_MULTIPLIER;
+			g_lookAtProgress = std::clamp(g_lookAtProgress + (wantLook ? 1.0f : -1.0f) * a_delta / dur, 0.0f, 1.0f);
 
-			if (g_lookAtCamWeight > 0.001f) {
+			if (g_lookAtProgress > 0.0f) {
 				float camHead = 0.0f, camSpine2 = 0.0f;
 				SplitYaw(camRelYaw, camHead, camSpine2);
 				camPitch = std::clamp(camPitch, -maxPitchDown, maxPitchUp);
 
-				const float w = g_lookAtCamWeight;
+				// smoothstep: parte suave, acelera y frena suave, como un giro de cabeza real
+				const float p = g_lookAtProgress;
+				const float w = p * p * (3.0f - 2.0f * p);
 				targetHeadYaw = targetHeadYaw * (1.0f - w) + camHead * w;
 				targetSpine2Yaw = targetSpine2Yaw * (1.0f - w) + camSpine2 * w;
 				clampedPitch = clampedPitch * (1.0f - w) + camPitch * w;
