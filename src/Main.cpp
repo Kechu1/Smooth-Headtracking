@@ -341,7 +341,7 @@ namespace
 		if (RE::IsPlayerInDialogue()) {
 			return true;
 		}
-		if (auto* mtm = RE::MenuTopicManager::GetSingleton(); mtm && (mtm->menuOpen || mtm->speaker)) {
+		if (auto* mtm = RE::MenuTopicManager::GetSingleton(); mtm && mtm->menuOpen) {
 			return true;
 		}
 		if (auto* ui = RE::UI::GetSingleton(); ui && ui->IsMenuOpen<RE::DialogueMenu>().value_or(false)) {
